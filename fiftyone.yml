@@ -1,0 +1,14 @@
+name: "@crossmodal/anomaly-explorer"
+type: plugin
+version: 1.0.0
+description: >
+  Detects audio-visual anomalies in video using Twelve Labs Marengo embeddings.
+  Computes cross-modal divergence (audio vs visual), visual temporal drift,
+  and audio temporal drift per segment. Flags moments where the senses disagree.
+fiftyone:
+  version: ">=0.23"
+operators:
+  - compute_anomalies
+  - show_anomalies
+secrets:
+  - TWELVELABS_API_KEY
