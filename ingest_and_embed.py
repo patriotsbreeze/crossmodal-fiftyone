@@ -351,7 +351,7 @@ def embed_clips_with_twelvelabs(
         while True:
             task_result = client.embed.tasks.retrieve(
                 task.id,
-                embedding_option=["visual-text", "audio", "transcription"],
+                embedding_option=["visual", "audio", "transcription"],
             )
             print(f"[embed] {video_name}: status={task_result.status}")
             if task_result.status == "ready":
