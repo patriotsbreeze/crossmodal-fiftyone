@@ -1,0 +1,10 @@
+# run_pipeline / ingest_and_embed / dual_clustering / co_occurrence_math
+# Optional system tool: ffmpeg (used in ingest_and_embed to remux some EPIC-Kitchens downloads)
+
+fiftyone>=0.24.0
+numpy>=1.23,<3
+python-dotenv>=1.0.0
+huggingface_hub>=0.20.0
+twelvelabs>=0.3.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
