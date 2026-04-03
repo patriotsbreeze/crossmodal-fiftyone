@@ -25,8 +25,8 @@ load_dotenv()
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAX_SAMPLE_CLIPS = 4  # Hard cap — do not remove
-CLIP_DURATION_SEC = 3.0
-CLIP_STRIDE_SEC = 1.5  # 50 % overlap
+CLIP_DURATION_SEC = 1
+CLIP_STRIDE_SEC = 1 # 50 % overlap
 EMBEDDING_DIM = 512  # marengo3.0 produces 512-d vectors
 EMBED_MODEL = "marengo3.0"
 

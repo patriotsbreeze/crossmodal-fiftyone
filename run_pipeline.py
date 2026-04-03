@@ -58,7 +58,7 @@ def score_crossmodal(
 def main() -> None:
     # ── 1. Ingest & embed ─────────────────────────────────────────────────
     # video_paths = download_epic_kitchens_samples()
-    local_test_video = Path("trimmed_AVA_data.mp4")
+    local_test_video = Path("updated_pasta_shatter.mp4")
     video_paths = [local_test_video.resolve()]
     dataset = load_into_fiftyone(video_paths)
     clips = segment_into_clips(dataset)
