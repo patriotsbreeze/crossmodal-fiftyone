@@ -21,7 +21,7 @@ from ingest_and_embed import (
     embed_clips_with_twelvelabs,
 )
 from dual_clustering import assign_sensory_clusters
-from co_occurrence_math import calculate_contextual_anomalies
+from co_occurrence_math import score_audio_drift
 
 load_dotenv()
 
@@ -63,27 +63,47 @@ def main() -> None:
         visual_matrix, audio_matrix,
     )
 
-    # ── 4. Score anomalies ────────────────────────────────────────────────
-    scores = calculate_contextual_anomalies(visual_labels, audio_labels)
+    # ── 4. Score anomalies (temporal audio drift from silent baseline) ────
+    scores = score_audio_drift(audio_matrix)
 
-    # ── 5. Write results back to FiftyOne ─────────────────────────────────
+    ANOMALY_THRESHOLD = 0.9
+
+    # ── 5. Write results onto TemporalDetection labels (persists) ──────────
     label_map = {
         cid: (v, a, s)
         for cid, v, a, s in zip(embedded_clip_ids, visual_labels, audio_labels, scores)
     }
-    for clip in clips.iter_samples(autosave=True):
-        if clip.id in label_map:
-            v_lbl, a_lbl, score = label_map[clip.id]
-            clip["visual_cluster"] = v_lbl
-            clip["audio_cluster"] = a_lbl
-            clip["contextual_anomaly_score"] = score
 
-    # ── 6. Launch app sorted by most anomalous ────────────────────────────
-    print("\n[pipeline] Done. Launching FiftyOne app …")
-    print("[pipeline] Clips sorted by contextual_anomaly_score (highest first).\n")
+    clip_iter = iter(clips)
+    for sample in dataset.iter_samples(autosave=True):
+        detections = sample["segments"].detections
+        for det in detections:
+            clip = next(clip_iter)
+            if clip.id in label_map:
+                v_lbl, a_lbl, score = label_map[clip.id]
+                det["visual_cluster"] = v_lbl
+                det["audio_cluster"] = a_lbl
+                det["audio_anomaly_score"] = score
+                det["is_anomaly"] = score >= ANOMALY_THRESHOLD
+        sample["segments"] = fo.TemporalDetections(detections=detections)
 
-    anomalous_view = clips.sort_by("contextual_anomaly_score", reverse=True)
-    session = fo.launch_app(view=anomalous_view)
+    # ── 6. Print summary & launch app ─────────────────────────────────────
+    print("\n[pipeline] Results written to segment labels.")
+    print("[pipeline] Launching FiftyOne app …\n")
+
+    # Print a table so results are visible even outside the app.
+    clips = dataset.to_clips("segments")
+    for clip in clips:
+        det = clip["segments"]
+        vc = getattr(det, "visual_cluster", "?")
+        ac = getattr(det, "audio_cluster", "?")
+        sc = getattr(det, "audio_anomaly_score", "?")
+        flag = "  <<< ANOMALY" if isinstance(sc, float) and sc >= ANOMALY_THRESHOLD else ""
+        print(f"  {clip.support}  V={vc}  A={ac}  score={sc:.3f}{flag}"
+              if isinstance(sc, float) else
+              f"  {clip.support}  V={vc}  A={ac}  score={sc}")
+
+    session = fo.launch_app(dataset)
     session.wait()
 
 
