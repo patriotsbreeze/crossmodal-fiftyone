@@ -17,12 +17,18 @@ We are building a **FiftyOne custom plugin** for **multimodal anomaly detection*
 
 | Purpose | Library |
 |---|---|
-| Vector mathematics | `numpy` |
+| Vector / matrix operations | `numpy` |
+| Tabular data, crosstab probabilities | `pandas` |
+| Clustering (HDBSCAN) | `scikit-learn` (`sklearn.cluster.HDBSCAN`) |
 | Video/multimodal embeddings | `twelvelabs` (official Python SDK) |
 | Dataset management & visualization | `fiftyone` |
 | Unit testing | `pytest` |
 
-Do not introduce alternative libraries for these roles (e.g., no `scipy` for vector math, no other embedding SDKs).
+**Use `numpy` and `pandas` aggressively** for matrix operations and crosstab probability computations. Prefer vectorised operations over Python loops.
+
+**Use `scikit-learn` specifically for HDBSCAN clustering** (`sklearn.cluster.HDBSCAN`). Do not use the standalone `hdbscan` package.
+
+Do not introduce alternative libraries for these roles (e.g., no `scipy` for vector math, no other embedding SDKs, no standalone `hdbscan` package).
 
 ---
 
