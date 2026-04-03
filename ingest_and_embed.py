@@ -53,6 +53,7 @@ class SegmentEmbedding:
     end_sec: float
     visual: NDArray[np.float32] | None = field(default=None)
     audio: NDArray[np.float32] | None = field(default=None)
+    description: str | None = field(default=None)
 
 
 # ── Download helpers ──────────────────────────────────────────────────────────
@@ -206,7 +207,7 @@ def segment_into_clips(
 
 def initialize_embedding_fields(clips_view: fo.DatasetView) -> None:
     """
-    Register the five analysis fields on the clips schema using typed
+    Register analysis fields on the clips schema using typed
     defaults so FiftyOne can infer the field type.
 
     Fields initialised:
@@ -215,6 +216,11 @@ def initialize_embedding_fields(clips_view: fo.DatasetView) -> None:
         - ``audio_cluster``    (str)
         - ``visual_cluster``   (str)
         - ``contextual_anomaly_score`` (float)
+        - ``audio_cluster_name`` (str)
+        - ``visual_cluster_name`` (str)
+        - ``contextual_anomaly_level`` (str)
+        - ``segment_description`` (str)
+        - ``contextual_label`` (str)
     """
     # Set typed defaults on the first clip so FiftyOne creates the schema,
     # then clear them back out on all clips.
@@ -224,9 +230,14 @@ def initialize_embedding_fields(clips_view: fo.DatasetView) -> None:
     first["audio_cluster"] = ""
     first["visual_cluster"] = ""
     first["contextual_anomaly_score"] = 0.0
+    first["audio_cluster_name"] = ""
+    first["visual_cluster_name"] = ""
+    first["contextual_anomaly_level"] = ""
+    first["segment_description"] = ""
+    first["contextual_label"] = ""
     first.save()
 
-    print("[schema] Initialised 5 fields on clips.")
+    print("[schema] Initialised analysis fields on clips.")
 
 
 # ── Twelve Labs embedding ────────────────────────────────────────────────────
@@ -251,13 +262,34 @@ def _parse_segment_embeddings(
         if key not in buckets:
             buckets[key] = SegmentEmbedding(start_sec=key[0], end_sec=key[1])
 
-        emb = np.asarray(seg.float_, dtype=np.float32)
+        option = getattr(seg, "embedding_option", "")
 
-        match seg.embedding_option:
+        match option:
             case "visual" | "visual-text":
-                buckets[key].visual = emb
+                vector = getattr(seg, "float_", None)
+                if vector is None:
+                    continue
+                buckets[key].visual = np.asarray(vector, dtype=np.float32)
             case "audio":
-                buckets[key].audio = emb
+                vector = getattr(seg, "float_", None)
+                if vector is None:
+                    continue
+                buckets[key].audio = np.asarray(vector, dtype=np.float32)
+            case "transcription":
+                text = (
+                    getattr(seg, "text", None)
+                    or getattr(seg, "transcription", None)
+                    or getattr(seg, "caption", None)
+                )
+                if not text and hasattr(seg, "model_extra"):
+                    extra = seg.model_extra or {}
+                    for key_name in ("text", "transcription", "caption", "content"):
+                        value = extra.get(key_name)
+                        if isinstance(value, str) and value.strip():
+                            text = value.strip()
+                            break
+                if isinstance(text, str) and text.strip():
+                    buckets[key].description = text.strip()
 
     return sorted(buckets.values(), key=lambda s: s.start_sec)
 
@@ -317,7 +349,10 @@ def embed_clips_with_twelvelabs(
 
         # Poll until the task is ready.
         while True:
-            task_result = client.embed.tasks.retrieve(task.id)
+            task_result = client.embed.tasks.retrieve(
+                task.id,
+                embedding_option=["visual-text", "audio", "transcription"],
+            )
             print(f"[embed] {video_name}: status={task_result.status}")
             if task_result.status == "ready":
                 break
@@ -355,6 +390,8 @@ def embed_clips_with_twelvelabs(
                 clip["visual_embedding"] = seg.visual.tolist()
             if seg.audio is not None:
                 clip["audio_embedding"] = seg.audio.tolist()
+            if seg.description is not None:
+                clip["segment_description"] = seg.description
 
         print(f"[embed] {video_name}: clips populated.")
 

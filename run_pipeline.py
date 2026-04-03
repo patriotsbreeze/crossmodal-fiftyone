@@ -26,6 +26,38 @@ from co_occurrence_math import calculate_contextual_anomalies
 load_dotenv()
 
 
+def _cluster_display_name(label: str, modality: str) -> str:
+    """Convert machine cluster labels into concise human-readable names."""
+    _, _, suffix = label.partition("_")
+    if suffix == "-1":
+        return f"{modality} noise/outlier"
+    return f"{modality} cluster {suffix}"
+
+
+def _anomaly_level(score: float) -> str:
+    """Bucket anomaly scores into coarse human-readable levels."""
+    if score >= 0.8:
+        return "high"
+    if score >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _contextual_label(
+    segment_description: str,
+    visual_name: str,
+    audio_name: str,
+    anomaly_level: str,
+) -> str:
+    """Build a user-facing segment label with semantics and anomaly context."""
+    if segment_description.strip():
+        return (
+            f"{segment_description.strip()} | "
+            f"{visual_name}, {audio_name}, anomaly {anomaly_level}"
+        )
+    return f"{visual_name} + {audio_name} | anomaly {anomaly_level}"
+
+
 def main() -> None:
     # ── 1. Ingest & embed ─────────────────────────────────────────────────
     video_paths = download_epic_kitchens_samples()
@@ -74,9 +106,20 @@ def main() -> None:
     for clip in clips.iter_samples(autosave=True):
         if clip.id in label_map:
             v_lbl, a_lbl, score = label_map[clip.id]
+            v_name = _cluster_display_name(v_lbl, "visual")
+            a_name = _cluster_display_name(a_lbl, "audio")
+            level = _anomaly_level(score)
+            segment_description = str(clip.get("segment_description", ""))
+
             clip["visual_cluster"] = v_lbl
             clip["audio_cluster"] = a_lbl
             clip["contextual_anomaly_score"] = score
+            clip["visual_cluster_name"] = v_name
+            clip["audio_cluster_name"] = a_name
+            clip["contextual_anomaly_level"] = level
+            clip["contextual_label"] = _contextual_label(
+                segment_description, v_name, a_name, level,
+            )
 
     # ── 6. Launch app sorted by most anomalous ────────────────────────────
     print("\n[pipeline] Done. Launching FiftyOne app …")
