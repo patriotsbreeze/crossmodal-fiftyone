@@ -15,7 +15,9 @@ import tempfile
 import time
 
 import fiftyone as fo
+import numpy as np
 from dotenv import load_dotenv
+from numpy.typing import NDArray
 from twelvelabs import TwelveLabs
 
 from ingest_and_embed import (
@@ -23,13 +25,17 @@ from ingest_and_embed import (
     load_into_fiftyone,
     segment_into_clips,
     initialize_embedding_fields,
+    embed_clips_with_twelvelabs,
 )
+from dual_clustering import assign_sensory_clusters
+from co_occurrence_math import score_audio_drift
 
 load_dotenv()
 
 MIN_ANALYZE_INTERVAL_SEC = 8.2
 MAX_ANALYZE_RETRIES = 5
 _RETRY_AFTER_REGEX = re.compile(r"'retry-after':\s*'(?P<seconds>\d+)'")
+LAUNCH_VIEW_MODE_ENV = "PIPELINE_LAUNCH_VIEW"
 
 
 def _clip_label_text(raw_description: str | None) -> str:
@@ -236,12 +242,26 @@ def _build_descriptive_segments_view(
     return dataset.to_clips("descriptive_segments")
 
 
+def _resolve_launch_view_mode() -> str:
+    """Resolve launch mode from env: 'descriptive' (default) or 'dataset'."""
+    raw = os.environ.get(LAUNCH_VIEW_MODE_ENV, "descriptive")
+    mode = raw.strip().lower()
+    if mode in {"descriptive", "dataset"}:
+        return mode
+    print(
+        f"[pipeline] Unknown {LAUNCH_VIEW_MODE_ENV}={raw!r}; "
+        "falling back to 'descriptive'."
+    )
+    return "descriptive"
+
+
 def main() -> None:
     # ── 1. Ingest & embed ─────────────────────────────────────────────────
     video_paths = download_epic_kitchens_samples()
     dataset = load_into_fiftyone(video_paths)
     clips = segment_into_clips(dataset)
     initialize_embedding_fields(clips)
+    embed_clips_with_twelvelabs(clips, dataset)
     _describe_clips_with_twelvelabs(clips, dataset)
 
     # ── 2. Normalize any empty labels (should be rare) ────────────────────
@@ -251,12 +271,89 @@ def main() -> None:
         clip["segment_event"] = fo.Classification(label=description)
         clip["contextual_label"] = description
 
-    # ── 3. Launch app with visible descriptive labels ─────────────────────
-    print("\n[pipeline] Done. Launching FiftyOne app …")
-    print("[pipeline] Launching clips with descriptive labels for each segment.\n")
+    # ── 3. Collect embeddings into matrices ───────────────────────────────
+    # Only keep clips that received real embeddings from the API.
+    embedded_clip_ids: list[str] = []
+    visual_list: list[list[float]] = []
+    audio_list: list[list[float]] = []
+    for clip in clips:
+        vis = clip["visual_embedding"]
+        aud = clip["audio_embedding"]
+        if (
+            isinstance(vis, list) and len(vis) > 0
+            and isinstance(aud, list) and len(aud) > 0
+            and any(v != 0.0 for v in vis)
+        ):
+            visual_list.append(vis)
+            audio_list.append(aud)
+            embedded_clip_ids.append(clip.id)
 
+    print(f"[pipeline] {len(embedded_clip_ids)}/{len(clips)} clips have embeddings.")
+    if not embedded_clip_ids:
+        raise RuntimeError("No clips received embeddings — cannot continue.")
+
+    visual_matrix: NDArray[np.float32] = np.array(visual_list, dtype=np.float32)
+    audio_matrix: NDArray[np.float32] = np.array(audio_list, dtype=np.float32)
+
+    # ── 4. Cluster ────────────────────────────────────────────────────────
+    visual_labels, audio_labels = assign_sensory_clusters(
+        visual_matrix, audio_matrix,
+    )
+
+    # ── 5. Score anomalies (temporal audio drift from silent baseline) ────
+    scores = score_audio_drift(audio_matrix)
+
+    ANOMALY_THRESHOLD = 0.9
+
+    # ── 6. Write results onto labels (persists) ───────────────────────────
+    label_map = {
+        cid: (v, a, s)
+        for cid, v, a, s in zip(embedded_clip_ids, visual_labels, audio_labels, scores)
+    }
+
+    for clip in clips.iter_samples(autosave=True):
+        if clip.id in label_map:
+            v_lbl, a_lbl, score = label_map[clip.id]
+            clip["visual_cluster"] = v_lbl
+            clip["audio_cluster"] = a_lbl
+            clip["contextual_anomaly_score"] = float(score)
+
+    clip_iter = iter(clips)
+    for sample in dataset.iter_samples(autosave=True):
+        detections = sample["segments"].detections
+        for det in detections:
+            clip = next(clip_iter)
+            if clip.id in label_map:
+                v_lbl, a_lbl, score = label_map[clip.id]
+                det["visual_cluster"] = v_lbl
+                det["audio_cluster"] = a_lbl
+                det["audio_anomaly_score"] = score
+                det["is_anomaly"] = score >= ANOMALY_THRESHOLD
+        sample["segments"] = fo.TemporalDetections(detections=detections)
+
+    # ── 7. Build descriptive segments, print summary, and launch app ──────
     descriptive_clips = _build_descriptive_segments_view(dataset, clips)
-    session = fo.launch_app(view=descriptive_clips)
+    launch_mode = _resolve_launch_view_mode()
+
+    print("\n[pipeline] Results written to segment labels.")
+    print(f"[pipeline] Launching FiftyOne app (mode={launch_mode}) …\n")
+
+    # Print a table so results are visible even outside the app.
+    clips = dataset.to_clips("segments")
+    for clip in clips:
+        det = clip["segments"]
+        vc = getattr(det, "visual_cluster", "?")
+        ac = getattr(det, "audio_cluster", "?")
+        sc = getattr(det, "audio_anomaly_score", "?")
+        flag = "  <<< ANOMALY" if isinstance(sc, float) and sc >= ANOMALY_THRESHOLD else ""
+        print(f"  {clip.support}  V={vc}  A={ac}  score={sc:.3f}{flag}"
+              if isinstance(sc, float) else
+              f"  {clip.support}  V={vc}  A={ac}  score={sc}")
+
+    if launch_mode == "dataset":
+        session = fo.launch_app(dataset)
+    else:
+        session = fo.launch_app(view=descriptive_clips)
     session.wait()
 
 

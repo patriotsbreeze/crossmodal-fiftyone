@@ -24,7 +24,7 @@ load_dotenv()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-MAX_SAMPLE_CLIPS = 3  # Hard cap — do not remove
+MAX_SAMPLE_CLIPS = 4  # Hard cap — do not remove
 CLIP_DURATION_SEC = 3.0
 CLIP_STRIDE_SEC = 1.5  # 50 % overlap
 EMBEDDING_DIM = 512  # marengo3.0 produces 512-d vectors
@@ -39,6 +39,11 @@ SMALLEST_VIDEOS = [
     "P03/videos/P03_15.MP4",  # ~40 MB
     "P03/videos/P03_26.MP4",  # ~43 MB
     "P06/videos/P06_02.MP4",  # ~53 MB
+]
+
+# Extra local videos to include alongside the HF downloads.
+LOCAL_VIDEOS = [
+    "trimmed_AVA_data.mp4",
 ]
 
 
@@ -115,7 +120,20 @@ def download_epic_kitchens_samples(
         return existing[:max_clips]
 
     paths: list[Path] = []
-    for remote in SMALLEST_VIDEOS[:max_clips]:
+
+    # Include local videos first (already clean — no remux needed).
+    for local_name in LOCAL_VIDEOS:
+        if len(paths) >= max_clips:
+            break
+        local = output_dir / local_name
+        if local.exists():
+            print(f"[download] Local file: {local}")
+            paths.append(local)
+
+    # Fill remaining slots from HuggingFace.
+    for remote in SMALLEST_VIDEOS:
+        if len(paths) >= max_clips:
+            break
         local = Path(
             hf_hub_download(
                 repo_id=HF_REPO_ID,
